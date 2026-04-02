@@ -183,6 +183,9 @@ def classify_terms(df: pd.DataFrame) -> tuple[frozenset, frozenset]:
 
     Returns (active_ids, moonshot_ids) as frozensets.
     """
+    if df.empty or "rank_capped" not in df.columns:
+        return frozenset(), frozenset()
+
     active: set = set()
 
     org = df[df["term_type"].isin(ORGANIC_TYPES)]
