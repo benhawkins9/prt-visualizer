@@ -974,18 +974,6 @@ try:
             use_container_width=True,
         )
 
-    if chart_view in ("All", "Organic") and not monthly_avg_vis.empty:
-        fig_vis = px.line(monthly_avg_vis, x="month", y="avg_vis",
-                          labels={"month": "Month", "avg_vis": "Avg. Visibility Score"},
-                          title="Organic Visibility Score Over Time — All Clients")
-        fig_vis.update_yaxes(range=[0, 100])
-        fig_vis.update_traces(line_color=BLUE, line_width=2)
-        st.caption(
-            "ℹ️ **Visibility Score** — Position 1 = 100 pts · Position 10 = 40 pts · "
-            "Not ranking = 0 pts. Higher is always better."
-        )
-        st.plotly_chart(fig_vis, use_container_width=True)
-
 except Exception as _exc:
     st.error(f"Chart error: {_exc}")
     st.exception(_exc)
@@ -1014,11 +1002,6 @@ try:
                 dist_bar_from_counts(_mod, _org_buckets, _org_colors, _org_title),
                 use_container_width=True,
             )
-            if _wins:
-                st.caption(
-                    "Wins Focus: showing distribution among ranking keywords only "
-                    "(keywords not ranking are excluded)."
-                )
             if not df_org_base.empty and not df_organic.empty:
                 st.markdown("**Before vs. After Snapshot**")
                 st.plotly_chart(
@@ -1042,12 +1025,7 @@ try:
                 ),
                 use_container_width=True,
             )
-            if _wins:
-                st.caption(
-                    "Wins Focus: showing distribution among in-pack appearances only "
-                    "(keywords not in the pack are excluded)."
-                )
-            else:
+            if not _wins:
                 st.info(
                     "**Industry context:** The dashed line marks ~15% — appearing in the local pack "
                     "top 3 (A/B/C) for 10–20% of keywords is **competitive for most local businesses**. "
