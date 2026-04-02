@@ -181,8 +181,8 @@ def get_monthly_local_dist_df(date_from: str, date_to: str) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def get_monthly_avg_vis_df(date_from: str, date_to: str) -> pd.DataFrame:
-    rows = load_monthly_avg_vis_score(date_from, date_to)
+def get_monthly_avg_vis_df(date_from: str, date_to: str, ranking_only: bool = False) -> pd.DataFrame:
+    rows = load_monthly_avg_vis_score(date_from, date_to, ranking_only=ranking_only)
     if not rows:
         return pd.DataFrame(columns=["month", "avg_vis"])
     return pd.DataFrame(rows)
@@ -644,19 +644,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    show_mode = st.radio(
-        "Show Mode",
-        ["Wins Focus", "Full Picture"],
-        index=0,
-        help=(
-            "**Wins Focus** — hides 'Not Ranking' from all charts and filters "
-            "metrics to actively ranking keywords only. Best for client conversations.\n\n"
-            "**Full Picture** — shows everything including not-ranking keywords."
-        ),
-    )
-
-    st.markdown("---")
-
     if st.session_state.selected_client:
         if st.button("← All Clients", use_container_width=True):
             st.session_state.selected_client = None
@@ -685,7 +672,8 @@ else:
 
 # Wins Focus: strip not-ranking observations so every downstream view reflects
 # only keywords that are actively ranking.
-_wins = show_mode == "Wins Focus"
+# Wins Focus is hardcoded on. To switch to Full Picture internally, set to False.
+_wins = True
 if _wins:
     df_snap = df_snap[df_snap["rank_capped"] < NOT_RANKED]
     df_base = df_base[df_base["rank_capped"] < NOT_RANKED]
@@ -698,7 +686,7 @@ df_loc_base = df_base[df_base["term_type"].isin(LOCAL_MAP_TYPES)]
 monthly_counts   = get_monthly_counts(filter_from, filter_to)
 monthly_org_dist = get_monthly_organic_dist_df(filter_from, filter_to)
 monthly_loc_dist = get_monthly_local_dist_df(filter_from, filter_to)
-monthly_avg_vis  = get_monthly_avg_vis_df(filter_from, filter_to)
+monthly_avg_vis  = get_monthly_avg_vis_df(filter_from, filter_to, ranking_only=_wins)
 
 # Wins Focus: drop not-ranking rows from monthly aggregates before charting
 _mc  = monthly_counts[monthly_counts["bucket"] != "Not Ranking"]  if _wins else monthly_counts
@@ -842,12 +830,6 @@ if st.session_state.selected_client:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 st.title("SEO Rankings Dashboard")
-
-if _wins:
-    st.info(
-        "🏆 **Wins Focus mode** — all charts and metrics show actively ranking keywords only. "
-        "Switch to **Full Picture** in the sidebar to include not-ranking keywords."
-    )
 
 _date_label = (
     f"{pd.to_datetime(filter_from).strftime('%b %Y')} – "

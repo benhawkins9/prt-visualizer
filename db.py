@@ -277,15 +277,20 @@ def load_active_term_ids(date_from: str, date_to: str) -> tuple[frozenset, froze
     return frozenset(r[0] for r in active_rows), frozenset(r[0] for r in all_rows)
 
 
-def load_monthly_avg_vis_score(date_from: str, date_to: str) -> list[dict]:
+def load_monthly_avg_vis_score(
+    date_from: str, date_to: str, ranking_only: bool = False
+) -> list[dict]:
     """
     Monthly average organic visibility score across all clients.
     Uses the same CTR-weighted formula as visibility_score() in app.py.
+    ranking_only=True: excludes observations where rank is 0/NULL/>=101,
+      so the average reflects only keywords that were actually ranking that month.
     ~24 rows.
     """
+    rank_filter = "AND h.rank IS NOT NULL AND h.rank > 0 AND h.rank < 101" if ranking_only else ""
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT substr(h.checked_date, 1, 7) AS month,
+            f"""SELECT substr(h.checked_date, 1, 7) AS month,
                       AVG(CASE
                           WHEN h.rank IS NULL OR h.rank = 0 OR h.rank >= 101 THEN 0
                           WHEN h.rank = 1  THEN 100
@@ -301,6 +306,7 @@ def load_monthly_avg_vis_score(date_from: str, date_to: str) -> list[dict]:
                JOIN terms t ON t.id = h.term_id
                WHERE h.checked_date BETWEEN ? AND ?
                  AND t.term_type IN ('organic', 'mobile')
+                 {rank_filter}
                GROUP BY month
                ORDER BY month""",
             (date_from, date_to),
