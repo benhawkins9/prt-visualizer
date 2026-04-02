@@ -256,20 +256,29 @@ def stacked_bar_from_counts(
     counts_df: pd.DataFrame,
     term_types: set | None,
     title: str,
+    wins_focus: bool = False,
 ) -> go.Figure:
-    """100% stacked bar from pre-aggregated monthly bucket counts."""
+    """
+    100% stacked bar from pre-aggregated monthly bucket counts.
+    wins_focus: if True, 'Not Ranking' rows are expected to already be excluded from
+                counts_df; the trace is omitted and the Y-axis label reflects that.
+    """
     d = counts_df.copy()
     if term_types:
         d = d[d["term_type"].isin(term_types)]
     grouped = d.groupby(["month", "bucket"])["cnt"].sum().unstack(fill_value=0)
-    for b in ["Top 3", "Ranking", "Not Ranking"]:
+    for b in ["Top 3", "Ranking"]:
         if b not in grouped.columns:
             grouped[b] = 0
-    grouped = grouped[["Top 3", "Ranking", "Not Ranking"]]
+    cols = ["Top 3", "Ranking"] if wins_focus else ["Top 3", "Ranking", "Not Ranking"]
+    if not wins_focus and "Not Ranking" not in grouped.columns:
+        grouped["Not Ranking"] = 0
+    grouped = grouped[cols]
     totals  = grouped.sum(axis=1)
     pct     = grouped.div(totals, axis=0) * 100
     months  = pct.index.tolist()
 
+    y_label = "% of Ranking Keywords" if wins_focus else "% of Keywords"
     fig = go.Figure()
     fig.add_trace(go.Bar(name="Top 3", x=months, y=pct["Top 3"].round(1),
                          marker_color=GREEN,
@@ -277,12 +286,13 @@ def stacked_bar_from_counts(
     fig.add_trace(go.Bar(name="Ranking (not top 3)", x=months, y=pct["Ranking"].round(1),
                          marker_color=YELLOW,
                          hovertemplate="Ranking (not top 3): %{y:.1f}%<extra></extra>"))
-    fig.add_trace(go.Bar(name="Not Ranking", x=months, y=pct["Not Ranking"].round(1),
-                         marker_color=RED,
-                         hovertemplate="Not Ranking: %{y:.1f}%<extra></extra>"))
+    if not wins_focus:
+        fig.add_trace(go.Bar(name="Not Ranking", x=months, y=pct["Not Ranking"].round(1),
+                             marker_color=RED,
+                             hovertemplate="Not Ranking: %{y:.1f}%<extra></extra>"))
     fig.update_layout(
         barmode="stack", title=title, xaxis_title="Month",
-        yaxis=dict(range=[0, 100], ticksuffix="%", title="% of Keywords"),
+        yaxis=dict(range=[0, 100], ticksuffix="%", title=y_label),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         height=380, margin=dict(t=60),
     )
@@ -472,8 +482,10 @@ if _client_slug:
         st.info("No ranking data available for this client.")
         st.stop()
 
-    df_c_org = df_c_raw[df_c_raw["term_type"].isin(ORGANIC_TYPES)]
-    df_c_loc = df_c_raw[df_c_raw["term_type"].isin(LOCAL_MAP_TYPES)]
+    # Reports are always in Wins Focus — client-facing, lead with positive story
+    _report_df = df_c_raw[df_c_raw["rank_capped"] < NOT_RANKED]
+    df_c_org = _report_df[_report_df["term_type"].isin(ORGANIC_TYPES)]
+    df_c_loc = _report_df[_report_df["term_type"].isin(LOCAL_MAP_TYPES)]
     has_org  = not df_c_org.empty
     has_loc  = not df_c_loc.empty
 
@@ -632,6 +644,19 @@ with st.sidebar:
 
     st.markdown("---")
 
+    show_mode = st.radio(
+        "Show Mode",
+        ["Wins Focus", "Full Picture"],
+        index=0,
+        help=(
+            "**Wins Focus** — hides 'Not Ranking' from all charts and filters "
+            "metrics to actively ranking keywords only. Best for client conversations.\n\n"
+            "**Full Picture** — shows everything including not-ranking keywords."
+        ),
+    )
+
+    st.markdown("---")
+
     if st.session_state.selected_client:
         if st.button("← All Clients", use_container_width=True):
             st.session_state.selected_client = None
@@ -658,6 +683,13 @@ else:
     df_snap = df_latest
     df_base = df_baseline
 
+# Wins Focus: strip not-ranking observations so every downstream view reflects
+# only keywords that are actively ranking.
+_wins = show_mode == "Wins Focus"
+if _wins:
+    df_snap = df_snap[df_snap["rank_capped"] < NOT_RANKED]
+    df_base = df_base[df_base["rank_capped"] < NOT_RANKED]
+
 df_organic  = df_snap[df_snap["term_type"].isin(ORGANIC_TYPES)]
 df_local    = df_snap[df_snap["term_type"].isin(LOCAL_MAP_TYPES)]
 df_org_base = df_base[df_base["term_type"].isin(ORGANIC_TYPES)]
@@ -667,6 +699,17 @@ monthly_counts   = get_monthly_counts(filter_from, filter_to)
 monthly_org_dist = get_monthly_organic_dist_df(filter_from, filter_to)
 monthly_loc_dist = get_monthly_local_dist_df(filter_from, filter_to)
 monthly_avg_vis  = get_monthly_avg_vis_df(filter_from, filter_to)
+
+# Wins Focus: drop not-ranking rows from monthly aggregates before charting
+_mc  = monthly_counts[monthly_counts["bucket"] != "Not Ranking"]  if _wins else monthly_counts
+_mod = monthly_org_dist[monthly_org_dist["bucket"] != "Not Ranking"] if _wins else monthly_org_dist
+_mld = monthly_loc_dist[monthly_loc_dist["bucket"] != "Not in Pack"] if _wins else monthly_loc_dist
+
+# Bucket lists for distribution charts — drop the "nothing" bucket in Wins Focus
+_org_buckets = ORG_BUCKETS[:-1] if _wins else ORG_BUCKETS   # drop "Not Ranking"
+_org_colors  = ORG_COLORS[:-1]  if _wins else ORG_COLORS
+_loc_buckets = LOC_BUCKETS[:-1] if _wins else LOC_BUCKETS   # drop "Not in Pack"
+_loc_colors  = LOC_COLORS[:-1]  if _wins else LOC_COLORS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -695,6 +738,9 @@ if st.session_state.selected_client:
         df_c = df_c_raw[df_c_raw["term_id"].isin(moonshot_ids)]
     else:
         df_c = df_c_raw
+
+    if _wins:
+        df_c = df_c[df_c["rank_capped"] < NOT_RANKED]
 
     if df_c.empty:
         st.info("No ranking data in cache for this client. Click **Refresh Data** to sync.")
@@ -797,6 +843,12 @@ if st.session_state.selected_client:
 
 st.title("SEO Rankings Dashboard")
 
+if _wins:
+    st.info(
+        "🏆 **Wins Focus mode** — all charts and metrics show actively ranking keywords only. "
+        "Switch to **Full Picture** in the sidebar to include not-ranking keywords."
+    )
+
 _date_label = (
     f"{pd.to_datetime(filter_from).strftime('%b %Y')} – "
     f"{pd.to_datetime(sel_to + '-01').strftime('%b %Y')}"
@@ -827,7 +879,8 @@ try:
         vis_then = df_base["vis_score"].mean() if not df_base.empty else vis_now
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("Total Keywords Tracked", f"{df_snap['term_id'].nunique():,}")
+            _kw_label = "Actively Ranking Keywords" if _wins else "Total Keywords Tracked"
+            st.metric(_kw_label, f"{df_snap['term_id'].nunique():,}")
         with c2:
             st.metric(
                 "Overall Visibility Score",
@@ -922,10 +975,11 @@ try:
         horizontal=True,
         key="chart_view",
     )
+    _suffix = " — Ranking Only" if _wins else ""
     chart_title = {
-        "All":               "Monthly Ranking Distribution — All Keywords",
-        "Organic":           "Monthly Ranking Distribution — Organic",
-        "Local Pack / Maps": "Monthly Ranking Distribution — Local Pack / Maps",
+        "All":               f"Monthly Ranking Distribution — All Keywords{_suffix}",
+        "Organic":           f"Monthly Ranking Distribution — Organic{_suffix}",
+        "Local Pack / Maps": f"Monthly Ranking Distribution — Local Pack / Maps{_suffix}",
     }[chart_view]
     term_types_filter = (
         ORGANIC_TYPES   if chart_view == "Organic" else
@@ -933,11 +987,11 @@ try:
         None
     )
 
-    if monthly_counts.empty:
+    if _mc.empty:
         st.info("No data for the selected period.")
     else:
         st.plotly_chart(
-            stacked_bar_from_counts(monthly_counts, term_types_filter, chart_title),
+            stacked_bar_from_counts(_mc, term_types_filter, chart_title, wins_focus=_wins),
             use_container_width=True,
         )
 
@@ -970,50 +1024,62 @@ try:
 
     dist_tab_org, dist_tab_loc = st.tabs(["🔍 Organic Distribution", "📍 Local Pack Distribution"])
 
+    _org_title = f"Organic Ranking Distribution by Month{_suffix}"
+    _loc_title = f"Local Pack Ranking Distribution by Month{_suffix}"
+
     with dist_tab_org:
-        if monthly_org_dist.empty:
+        if _mod.empty:
             st.info("No organic data available.")
         else:
             st.plotly_chart(
-                dist_bar_from_counts(monthly_org_dist, ORG_BUCKETS, ORG_COLORS,
-                                     "Organic Ranking Distribution by Month"),
+                dist_bar_from_counts(_mod, _org_buckets, _org_colors, _org_title),
                 use_container_width=True,
             )
+            if _wins:
+                st.caption(
+                    "Wins Focus: showing distribution among ranking keywords only "
+                    "(keywords not ranking are excluded)."
+                )
             if not df_org_base.empty and not df_organic.empty:
                 st.markdown("**Before vs. After Snapshot**")
                 st.plotly_chart(
                     distribution_donuts(
                         df_org_base, df_organic,
-                        organic_bucket, ORG_BUCKETS, ORG_COLORS,
+                        organic_bucket, _org_buckets, _org_colors,
                         label_base="Start of period", label_latest="End of period",
                     ),
                     use_container_width=True,
                 )
 
     with dist_tab_loc:
-        if monthly_loc_dist.empty:
+        if _mld.empty:
             st.info("No local pack data available.")
         else:
             st.plotly_chart(
                 dist_bar_from_counts(
-                    monthly_loc_dist, LOC_BUCKETS, LOC_COLORS,
-                    "Local Pack Ranking Distribution by Month",
-                    benchmark_pct=15,
+                    _mld, _loc_buckets, _loc_colors, _loc_title,
+                    benchmark_pct=15 if not _wins else None,
                     benchmark_label="~15% industry avg (top 3 combined)",
                 ),
                 use_container_width=True,
             )
-            st.info(
-                "**Industry context:** The dashed line marks ~15% — appearing in the local pack "
-                "top 3 (A/B/C) for 10–20% of keywords is **competitive for most local businesses**. "
-                "Many new clients start well below 5% and build from there."
-            )
+            if _wins:
+                st.caption(
+                    "Wins Focus: showing distribution among in-pack appearances only "
+                    "(keywords not in the pack are excluded)."
+                )
+            else:
+                st.info(
+                    "**Industry context:** The dashed line marks ~15% — appearing in the local pack "
+                    "top 3 (A/B/C) for 10–20% of keywords is **competitive for most local businesses**. "
+                    "Many new clients start well below 5% and build from there."
+                )
             if not df_loc_base.empty and not df_local.empty:
                 st.markdown("**Before vs. After Snapshot**")
                 st.plotly_chart(
                     distribution_donuts(
                         df_loc_base, df_local,
-                        local_bucket, LOC_BUCKETS, LOC_COLORS,
+                        local_bucket, _loc_buckets, _loc_colors,
                         label_base="Start of period", label_latest="End of period",
                     ),
                     use_container_width=True,
