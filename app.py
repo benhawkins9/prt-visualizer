@@ -644,6 +644,19 @@ with st.sidebar:
 
     st.markdown("---")
 
+    show_mode = st.radio(
+        "Show Mode",
+        ["Wins Focus", "Full Picture"],
+        index=0,
+        help=(
+            "**Wins Focus** — hides 'Not Ranking' from charts; metrics reflect "
+            "actively ranking keywords only.\n\n"
+            "**Full Picture** — shows everything including not-ranking keywords."
+        ),
+    )
+
+    st.markdown("---")
+
     if st.session_state.selected_client:
         if st.button("← All Clients", use_container_width=True):
             st.session_state.selected_client = None
@@ -672,8 +685,7 @@ else:
 
 # Wins Focus: strip not-ranking observations so every downstream view reflects
 # only keywords that are actively ranking.
-# Wins Focus is hardcoded on. To switch to Full Picture internally, set to False.
-_wins = True
+_wins = show_mode == "Wins Focus"
 if _wins:
     df_snap = df_snap[df_snap["rank_capped"] < NOT_RANKED]
     df_base = df_base[df_base["rank_capped"] < NOT_RANKED]
@@ -831,21 +843,6 @@ if st.session_state.selected_client:
 
 st.title("SEO Rankings Dashboard")
 
-_date_label = (
-    f"{pd.to_datetime(filter_from).strftime('%b %Y')} – "
-    f"{pd.to_datetime(sel_to + '-01').strftime('%b %Y')}"
-)
-_seg_labels = {
-    "Active Only":    f"Active keywords only ({n_active:,})",
-    "All Keywords":   f"All keywords ({n_active + n_moonshot:,} total)",
-    "Moonshots Only": f"Moonshot keywords only ({n_moonshot:,})",
-}
-_seg_caption = _seg_labels[keyword_segment]
-if keyword_segment == "Active Only" and n_moonshot > 0:
-    _seg_caption += (
-        f" · **{n_moonshot:,} moonshot keywords excluded** — toggle in sidebar to view."
-    )
-st.caption(f"Data: {_date_label}  ·  {_seg_caption}")
 
 if df_snap.empty:
     st.warning("No data yet — click **Refresh Data** to sync.")
