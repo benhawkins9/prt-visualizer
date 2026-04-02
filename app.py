@@ -42,10 +42,18 @@ if "selected_client" not in st.session_state:
 # ── Rank / score helpers ──────────────────────────────────────────────────────
 
 def cap_rank(r) -> int:
-    """Normalize PRT's unranked sentinels (0, None, 501) → 101."""
-    if r is None or r == 0 or r >= NOT_RANKED:
+    """
+    Normalize PRT's unranked sentinels (0, None, NaN, 501+) → 101.
+    Uses try/int() so that float('nan') and None both route to NOT_RANKED
+    rather than crashing on NaN comparisons (NaN >= 101 is always False).
+    """
+    try:
+        ri = int(r)
+    except (TypeError, ValueError):
         return NOT_RANKED
-    return int(r)
+    if ri == 0 or ri >= NOT_RANKED:
+        return NOT_RANKED
+    return ri
 
 
 def visibility_score(rank_capped: int) -> int:
@@ -141,9 +149,12 @@ def monthly_buckets(df: pd.DataFrame) -> pd.DataFrame:
 def get_all_history() -> pd.DataFrame:
     rows = load_all_history(DATE_FROM, TODAY)
     if not rows:
+        # Include ALL computed columns so downstream code never hits KeyError
+        # on rank_capped / vis_score / bucket even when the DB is empty.
         return pd.DataFrame(columns=[
-            "website_id", "website_url", "business_name",
+            "website_id", "website_url", "business_name", "client_name",
             "term_id", "keyword", "term_type", "checked_date", "rank",
+            "rank_capped", "vis_score", "bucket",
         ])
     df = pd.DataFrame(rows)
     df["checked_date"] = pd.to_datetime(df["checked_date"])
@@ -164,6 +175,7 @@ def get_client_history(website_id: int) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=[
             "term_id", "keyword", "term_type", "checked_date", "rank",
+            "rank_capped", "vis_score", "bucket",
         ])
     df = pd.DataFrame(rows)
     df["checked_date"] = pd.to_datetime(df["checked_date"])
@@ -580,294 +592,311 @@ df_local   = df_all[df_all["term_type"].isin(LOCAL_MAP_TYPES)]
 
 # ── Scorecard tabs ─────────────────────────────────────────────────────────────
 
-tab_all, tab_org, tab_loc = st.tabs(["🌐  All", "🔍  Organic", "📍  Local Pack / Maps"])
+try:
+    tab_all, tab_org, tab_loc = st.tabs(["🌐  All", "🔍  Organic", "📍  Local Pack / Maps"])
 
-with tab_all:
-    l_all = latest_per_term(df_all)
-    b_all = earliest_per_term(df_all)
-    vis_now  = l_all["vis_score"].mean()
-    vis_then = b_all["vis_score"].mean()
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Total Keywords Tracked", f"{df_all['term_id'].nunique():,}")
-    with c2:
-        st.metric(
-            "Overall Visibility Score",
-            f"{vis_now:.0f} / 100",
-            delta=f"{vis_now - vis_then:+.0f} since Feb 2024",
-            delta_color="normal" if vis_now >= vis_then else "inverse",
-            help="Weighted score (0–100) across all keyword types. "
-                 "Reflects estimated click-through rate. Higher is better.",
-        )
-    with c3:
-        pct_t3 = (l_all["rank_capped"] <= 3).mean() * 100
-        st.metric(
-            "Keywords in Top 3",
-            f"{pct_t3:.1f}%",
-            delta=f"{int((l_all['rank_capped'] <= 3).sum()):,} keywords",
-        )
-
-with tab_org:
-    if df_organic.empty:
-        st.info("No organic keyword data available.")
-    else:
-        l_org = latest_per_term(df_organic)
-        b_org = earliest_per_term(df_organic)
-        vis_org_now  = l_org["vis_score"].mean()
-        vis_org_then = b_org["vis_score"].mean()
-        pct10_now    = (l_org["rank_capped"] <= 10).mean() * 100
-        pct10_then   = (b_org["rank_capped"] <= 10).mean() * 100
+    with tab_all:
+        l_all = latest_per_term(df_all)
+        b_all = earliest_per_term(df_all)
+        vis_now  = l_all["vis_score"].mean()
+        vis_then = b_all["vis_score"].mean()
 
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric(
-                "Organic Visibility Score",
-                f"{vis_org_now:.0f} / 100",
-                delta=f"{vis_org_now - vis_org_then:+.0f} since Feb 2024",
-                delta_color="normal" if vis_org_now >= vis_org_then else "inverse",
-                help="Weighted score reflecting estimated CTR. "
-                     "Position 1 = 100 pts · Position 10 = 40 pts · Not ranking = 0 pts.",
-            )
+            st.metric("Total Keywords Tracked", f"{df_all['term_id'].nunique():,}")
         with c2:
             st.metric(
-                "Keywords in Top 10",
-                f"{pct10_now:.1f}%",
-                delta=f"{pct10_now - pct10_then:+.1f} pp since Feb 2024",
-                delta_color="normal" if pct10_now >= pct10_then else "inverse",
+                "Overall Visibility Score",
+                f"{vis_now:.0f} / 100",
+                delta=f"{vis_now - vis_then:+.0f} since Feb 2024",
+                delta_color="normal" if vis_now >= vis_then else "inverse",
+                help="Weighted score (0–100) across all keyword types. "
+                     "Reflects estimated click-through rate. Higher is better.",
             )
         with c3:
-            st.metric(
-                "Ranking Top 10",
-                f"{int((l_org['rank_capped'] <= 10).sum()):,} keywords",
-                delta=f"of {len(l_org):,} tracked",
-            )
-
-with tab_loc:
-    if df_local.empty:
-        st.info("No local pack / maps data available.")
-    else:
-        l_loc = latest_per_term(df_local)
-        b_loc = earliest_per_term(df_local)
-        n3_now  = int((l_loc["rank_capped"] <= 3).sum())
-        n3_then = int((b_loc["rank_capped"] <= 3).sum())
-        pct3_now  = n3_now  / len(l_loc) * 100
-        pct3_then = n3_then / len(b_loc) * 100
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(
-                "Keywords in Top 3 (Map Pack A–C)",
-                f"{pct3_now:.1f}%",
-                delta=f"{pct3_now - pct3_then:+.1f} pp since Feb 2024",
-                delta_color="normal" if pct3_now >= pct3_then else "inverse",
-                help="A ranking of 1, 2, or 3 in the local pack (A/B/C) counts as a WIN.",
-            )
-        with c2:
+            pct_t3 = (l_all["rank_capped"] <= 3).mean() * 100
             st.metric(
                 "Keywords in Top 3",
-                f"{n3_now:,}",
-                delta=f"{n3_now - n3_then:+d} since Feb 2024",
-                delta_color="normal" if n3_now >= n3_then else "inverse",
+                f"{pct_t3:.1f}%",
+                delta=f"{int((l_all['rank_capped'] <= 3).sum()):,} keywords",
             )
-        with c3:
-            n_ranking = int((l_loc["rank_capped"] < NOT_RANKED).sum())
-            st.metric(
-                "Ranking (Any Position)",
-                f"{n_ranking:,} keywords",
-                delta=f"of {len(l_loc):,} tracked",
-            )
+
+    with tab_org:
+        if df_organic.empty:
+            st.info("No organic keyword data available.")
+        else:
+            l_org = latest_per_term(df_organic)
+            b_org = earliest_per_term(df_organic)
+            vis_org_now  = l_org["vis_score"].mean()
+            vis_org_then = b_org["vis_score"].mean()
+            pct10_now    = (l_org["rank_capped"] <= 10).mean() * 100
+            pct10_then   = (b_org["rank_capped"] <= 10).mean() * 100
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric(
+                    "Organic Visibility Score",
+                    f"{vis_org_now:.0f} / 100",
+                    delta=f"{vis_org_now - vis_org_then:+.0f} since Feb 2024",
+                    delta_color="normal" if vis_org_now >= vis_org_then else "inverse",
+                    help="Weighted score reflecting estimated CTR. "
+                         "Position 1 = 100 pts · Position 10 = 40 pts · Not ranking = 0 pts.",
+                )
+            with c2:
+                st.metric(
+                    "Keywords in Top 10",
+                    f"{pct10_now:.1f}%",
+                    delta=f"{pct10_now - pct10_then:+.1f} pp since Feb 2024",
+                    delta_color="normal" if pct10_now >= pct10_then else "inverse",
+                )
+            with c3:
+                st.metric(
+                    "Ranking Top 10",
+                    f"{int((l_org['rank_capped'] <= 10).sum()):,} keywords",
+                    delta=f"of {len(l_org):,} tracked",
+                )
+
+    with tab_loc:
+        if df_local.empty:
+            st.info("No local pack / maps data available.")
+        else:
+            l_loc = latest_per_term(df_local)
+            b_loc = earliest_per_term(df_local)
+            n3_now  = int((l_loc["rank_capped"] <= 3).sum())
+            n3_then = int((b_loc["rank_capped"] <= 3).sum())
+            pct3_now  = n3_now  / len(l_loc) * 100
+            pct3_then = n3_then / len(b_loc) * 100
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric(
+                    "Keywords in Top 3 (Map Pack A–C)",
+                    f"{pct3_now:.1f}%",
+                    delta=f"{pct3_now - pct3_then:+.1f} pp since Feb 2024",
+                    delta_color="normal" if pct3_now >= pct3_then else "inverse",
+                    help="A ranking of 1, 2, or 3 in the local pack (A/B/C) counts as a WIN.",
+                )
+            with c2:
+                st.metric(
+                    "Keywords in Top 3",
+                    f"{n3_now:,}",
+                    delta=f"{n3_now - n3_then:+d} since Feb 2024",
+                    delta_color="normal" if n3_now >= n3_then else "inverse",
+                )
+            with c3:
+                n_ranking = int((l_loc["rank_capped"] < NOT_RANKED).sum())
+                st.metric(
+                    "Ranking (Any Position)",
+                    f"{n_ranking:,} keywords",
+                    delta=f"of {len(l_loc):,} tracked",
+                )
+
+except Exception as _exc:
+    st.error(f"Scorecard error: {_exc}")
+    st.exception(_exc)
 
 st.markdown("---")
 
 # ── Main stacked bar chart ─────────────────────────────────────────────────────
 
-chart_view = st.radio(
-    "View by:",
-    ["All", "Organic", "Local Pack / Maps"],
-    horizontal=True,
-    key="chart_view",
-)
-
-df_chart = (
-    df_organic if chart_view == "Organic" else
-    df_local   if chart_view == "Local Pack / Maps" else
-    df_all
-)
-
-chart_title = {
-    "All":               "Monthly Ranking Distribution — All Keywords",
-    "Organic":           "Monthly Ranking Distribution — Organic",
-    "Local Pack / Maps": "Monthly Ranking Distribution — Local Pack / Maps",
-}[chart_view]
-
-if df_chart.empty:
-    st.info("No data for this filter.")
-else:
-    st.plotly_chart(stacked_bar_chart(df_chart, chart_title), use_container_width=True)
-
-# Organic visibility score trend (shown under All or Organic view)
-if chart_view in ("All", "Organic") and not df_organic.empty:
-    avg_vis = (
-        df_organic.groupby("checked_date")["vis_score"]
-        .mean().reset_index()
-        .rename(columns={"vis_score": "avg_vis"})
+try:
+    chart_view = st.radio(
+        "View by:",
+        ["All", "Organic", "Local Pack / Maps"],
+        horizontal=True,
+        key="chart_view",
     )
-    fig_vis = px.line(
-        avg_vis, x="checked_date", y="avg_vis",
-        labels={"checked_date": "Date", "avg_vis": "Avg. Visibility Score"},
-        title="Organic Visibility Score Over Time — All Clients",
+
+    df_chart = (
+        df_organic if chart_view == "Organic" else
+        df_local   if chart_view == "Local Pack / Maps" else
+        df_all
     )
-    fig_vis.update_yaxes(range=[0, 100])
-    fig_vis.update_traces(line_color=BLUE, line_width=2)
-    st.caption(
-        "ℹ️ **Visibility Score** is a weighted metric based on estimated click-through rates. "
-        "Position 1 = 100 pts, position 10 = 40 pts, not ranking = 0 pts. "
-        "Higher is always better."
-    )
-    st.plotly_chart(fig_vis, use_container_width=True)
+
+    chart_title = {
+        "All":               "Monthly Ranking Distribution — All Keywords",
+        "Organic":           "Monthly Ranking Distribution — Organic",
+        "Local Pack / Maps": "Monthly Ranking Distribution — Local Pack / Maps",
+    }[chart_view]
+
+    if df_chart.empty:
+        st.info("No data for this filter.")
+    else:
+        st.plotly_chart(stacked_bar_chart(df_chart, chart_title), use_container_width=True)
+
+    # Organic visibility score trend (shown under All or Organic view)
+    if chart_view in ("All", "Organic") and not df_organic.empty:
+        avg_vis = (
+            df_organic.groupby("checked_date")["vis_score"]
+            .mean().reset_index()
+            .rename(columns={"vis_score": "avg_vis"})
+        )
+        fig_vis = px.line(
+            avg_vis, x="checked_date", y="avg_vis",
+            labels={"checked_date": "Date", "avg_vis": "Avg. Visibility Score"},
+            title="Organic Visibility Score Over Time — All Clients",
+        )
+        fig_vis.update_yaxes(range=[0, 100])
+        fig_vis.update_traces(line_color=BLUE, line_width=2)
+        st.caption(
+            "ℹ️ **Visibility Score** is a weighted metric based on estimated click-through rates. "
+            "Position 1 = 100 pts, position 10 = 40 pts, not ranking = 0 pts. "
+            "Higher is always better."
+        )
+        st.plotly_chart(fig_vis, use_container_width=True)
+
+except Exception as _exc:
+    st.error(f"Chart error: {_exc}")
+    st.exception(_exc)
 
 st.markdown("---")
 
 # ── Rank distribution charts ──────────────────────────────────────────────────
 
-st.subheader("Keyword Rank Distribution Over Time")
-st.caption(
-    "Each bar shows the full distribution of where keywords were ranking that month. "
-    "Green growing and red shrinking = the story you want to tell clients."
-)
+try:
+    st.subheader("Keyword Rank Distribution Over Time")
+    st.caption(
+        "Each bar shows the full distribution of where keywords were ranking that month. "
+        "Green growing and red shrinking = the story you want to tell clients."
+    )
 
-dist_tab_org, dist_tab_loc = st.tabs(["🔍 Organic Distribution", "📍 Local Pack Distribution"])
+    dist_tab_org, dist_tab_loc = st.tabs(["🔍 Organic Distribution", "📍 Local Pack Distribution"])
 
-with dist_tab_org:
-    if df_organic.empty:
-        st.info("No organic data available.")
-    else:
-        st.plotly_chart(
-            distribution_stacked_bar(
-                df_organic, organic_bucket, ORG_BUCKETS, ORG_COLORS,
-                "Organic Ranking Distribution by Month",
-            ),
-            use_container_width=True,
-        )
+    with dist_tab_org:
+        if df_organic.empty:
+            st.info("No organic data available.")
+        else:
+            st.plotly_chart(
+                distribution_stacked_bar(
+                    df_organic, organic_bucket, ORG_BUCKETS, ORG_COLORS,
+                    "Organic Ranking Distribution by Month",
+                ),
+                use_container_width=True,
+            )
 
-        # Donut before/after
-        b_org_snap = earliest_per_term(df_organic)
-        l_org_snap = latest_per_term(df_organic)
-        st.markdown("**Before vs. After Snapshot**")
-        st.plotly_chart(
-            distribution_donuts(
-                b_org_snap, l_org_snap,
-                organic_bucket, ORG_BUCKETS, ORG_COLORS,
-                label_base="Feb 2024", label_latest="Today",
-            ),
-            use_container_width=True,
-        )
+            b_org_snap = earliest_per_term(df_organic)
+            l_org_snap = latest_per_term(df_organic)
+            st.markdown("**Before vs. After Snapshot**")
+            st.plotly_chart(
+                distribution_donuts(
+                    b_org_snap, l_org_snap,
+                    organic_bucket, ORG_BUCKETS, ORG_COLORS,
+                    label_base="Feb 2024", label_latest="Today",
+                ),
+                use_container_width=True,
+            )
 
-with dist_tab_loc:
-    if df_local.empty:
-        st.info("No local pack data available.")
-    else:
-        st.plotly_chart(
-            distribution_stacked_bar(
-                df_local, local_bucket, LOC_BUCKETS, LOC_COLORS,
-                "Local Pack Ranking Distribution by Month",
-            ),
-            use_container_width=True,
-        )
+    with dist_tab_loc:
+        if df_local.empty:
+            st.info("No local pack data available.")
+        else:
+            st.plotly_chart(
+                distribution_stacked_bar(
+                    df_local, local_bucket, LOC_BUCKETS, LOC_COLORS,
+                    "Local Pack Ranking Distribution by Month",
+                ),
+                use_container_width=True,
+            )
 
-        b_loc_snap = earliest_per_term(df_local)
-        l_loc_snap = latest_per_term(df_local)
-        st.markdown("**Before vs. After Snapshot**")
-        st.plotly_chart(
-            distribution_donuts(
-                b_loc_snap, l_loc_snap,
-                local_bucket, LOC_BUCKETS, LOC_COLORS,
-                label_base="Feb 2024", label_latest="Today",
-            ),
-            use_container_width=True,
-        )
+            b_loc_snap = earliest_per_term(df_local)
+            l_loc_snap = latest_per_term(df_local)
+            st.markdown("**Before vs. After Snapshot**")
+            st.plotly_chart(
+                distribution_donuts(
+                    b_loc_snap, l_loc_snap,
+                    local_bucket, LOC_BUCKETS, LOC_COLORS,
+                    label_base="Feb 2024", label_latest="Today",
+                ),
+                use_container_width=True,
+            )
+
+except Exception as _exc:
+    st.error(f"Distribution chart error: {_exc}")
+    st.exception(_exc)
 
 st.markdown("---")
 
 # ── Client grid ───────────────────────────────────────────────────────────────
 
-st.subheader("Client Performance — click a card to drill in")
+try:
+    st.subheader("Client Performance — click a card to drill in")
 
-if not websites:
-    st.info("No clients found. Click **Refresh Data** to sync.")
-    st.stop()
+    if not websites:
+        st.info("No clients found. Click **Refresh Data** to sync.")
+    else:
+        # Precompute all card stats in one pass, then sort
+        c_stats  = all_client_stats(df_all)
+        site_map = {s["id"]: s for s in websites}
 
-# Precompute all card stats in one pass, then sort
-c_stats  = all_client_stats(df_all)
-site_map = {s["id"]: s for s in websites}
+        def _sort_key(wid):
+            s = c_stats.get(int(wid))
+            if s is None:
+                return -1
+            if s["has_local"]:
+                return s["pct_top3"]
+            if s["has_organic"]:
+                return s["vis_now"]
+            return -1
 
-def _sort_key(wid):
-    s = c_stats.get(int(wid))
-    if s is None:
-        return -1
-    if s["has_local"]:
-        return s["pct_top3"]
-    if s["has_organic"]:
-        return s["vis_now"]
-    return -1
+        sorted_ids = sorted(c_stats.keys(), key=_sort_key, reverse=True)
+        tracked_ids = set(sorted_ids)
+        for site in websites:
+            if site["id"] not in tracked_ids and int(site["id"]) not in tracked_ids:
+                sorted_ids.append(site["id"])
 
-sorted_ids = sorted(c_stats.keys(), key=_sort_key, reverse=True)
-# Append any websites missing from stats (no data)
-tracked_ids = set(sorted_ids)
-for site in websites:
-    if site["id"] not in tracked_ids and int(site["id"]) not in tracked_ids:
-        sorted_ids.append(site["id"])
+        COLS = 3
+        cols = st.columns(COLS)
 
-COLS = 3
-cols = st.columns(COLS)
+        for idx, wid in enumerate(sorted_ids):
+            site  = site_map.get(wid) or site_map.get(str(wid))
+            if site is None:
+                continue
+            stats = c_stats.get(wid) or c_stats.get(str(wid))
+            name  = display_name(site)
 
-for idx, wid in enumerate(sorted_ids):
-    site  = site_map.get(wid) or site_map.get(str(wid))
-    if site is None:
-        continue
-    stats = c_stats.get(wid) or c_stats.get(str(wid))
-    name  = display_name(site)
+            with cols[idx % COLS]:
+                with st.container(border=True):
+                    st.markdown(f"**{name}**")
+                    if site.get("url") and site.get("url") != name:
+                        st.caption(site["url"])
 
-    with cols[idx % COLS]:
-        with st.container(border=True):
-            st.markdown(f"**{name}**")
-            if site.get("url") and site.get("url") != name:
-                st.caption(site["url"])
-
-            if not stats:
-                st.caption("⚪ No data")
-            else:
-                # Local pack block
-                if stats["has_local"]:
-                    pct3  = stats["pct_top3"]
-                    n3    = stats["n_top3"]
-                    ntot  = stats["n_local_total"]
-                    delta = stats["n_top3"] - stats["n_top3_then"]
-
-                    if pct3 >= 50:
-                        badge = "🟢"
-                    elif pct3 > 0:
-                        badge = "🟡"
+                    if not stats:
+                        st.caption("⚪ No data")
                     else:
-                        badge = "🔴"
+                        # Local pack block
+                        if stats["has_local"]:
+                            pct3  = stats["pct_top3"]
+                            n3    = stats["n_top3"]
+                            ntot  = stats["n_local_total"]
+                            delta = stats["n_top3"] - stats["n_top3_then"]
 
-                    delta_str = f"{'↑' if delta >= 0 else '↓'} {abs(delta):+d} keywords since Feb '24"
-                    st.markdown(f"{badge} **Local Pack: {n3} / {ntot} keywords in Top 3 (A/B/C)**")
-                    st.caption(f"{pct3:.0f}% in pack  ·  {delta_str}")
+                            if pct3 >= 50:
+                                badge = "🟢"
+                            elif pct3 > 0:
+                                badge = "🟡"
+                            else:
+                                badge = "🔴"
 
-                # Organic block — vis_score is organic-only, never mixed with local pack
-                if stats["has_organic"]:
-                    vis    = stats["vis_now"]
-                    vis_ch = stats["vis_change"]
-                    arrow  = "↑" if vis_ch > 1 else ("↓" if vis_ch < -1 else "→")
-                    color  = GREEN if vis_ch > 1 else (RED if vis_ch < -1 else YELLOW)
-                    st.markdown(
-                        f"🔍 **Organic Visibility Score: {vis:.0f}/100** "
-                        f"<span style='color:{color}'>{arrow} {abs(vis_ch):.0f} pts since Feb '24</span>",
-                        unsafe_allow_html=True,
-                    )
+                            delta_str = f"{'↑' if delta >= 0 else '↓'} {abs(delta):+d} keywords since Feb '24"
+                            st.markdown(f"{badge} **Local Pack: {n3} / {ntot} keywords in Top 3 (A/B/C)**")
+                            st.caption(f"{pct3:.0f}% in pack  ·  {delta_str}")
 
-            if st.button("Details →", key=f"drill_{site['id']}", use_container_width=True):
-                st.session_state.selected_client = site
-                st.rerun()
+                        # Organic block — vis_score is organic-only, never mixed with local pack
+                        if stats["has_organic"]:
+                            vis    = stats["vis_now"]
+                            vis_ch = stats["vis_change"]
+                            arrow  = "↑" if vis_ch > 1 else ("↓" if vis_ch < -1 else "→")
+                            color  = GREEN if vis_ch > 1 else (RED if vis_ch < -1 else YELLOW)
+                            st.markdown(
+                                f"🔍 **Organic Visibility Score: {vis:.0f}/100** "
+                                f"<span style='color:{color}'>{arrow} {abs(vis_ch):.0f} pts since Feb '24</span>",
+                                unsafe_allow_html=True,
+                            )
+
+                    if st.button("Details →", key=f"drill_{site['id']}", use_container_width=True):
+                        st.session_state.selected_client = site
+                        st.rerun()
+
+except Exception as _exc:
+    st.error(f"Client grid error: {_exc}")
+    st.exception(_exc)
