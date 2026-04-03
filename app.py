@@ -32,11 +32,11 @@ YELLOW = "#eab308"
 RED    = "#ef4444"
 BLUE   = "#3b82f6"
 
-ORG_BUCKETS = ["Top 3", "Top 10", "Top 30", "Top 100", "Not Ranking"]
-ORG_COLORS  = ["#166534", "#86efac", "#eab308", "#f97316", "#ef4444"]
+ORG_BUCKETS = ["Not Ranking", "Top 100", "Top 30", "Top 10", "Top 3"]
+ORG_COLORS  = ["#ef4444", "#f97316", "#eab308", "#86efac", "#166534"]
 
-LOC_BUCKETS = ["Position 1 (A)", "Position 2 (B)", "Position 3 (C)", "Not in Pack"]
-LOC_COLORS  = ["#166534", "#22c55e", "#86efac", "#ef4444"]
+LOC_BUCKETS = ["Not in Pack", "Position 3 (C)", "Position 2 (B)", "Position 1 (A)"]
+LOC_COLORS  = ["#ef4444", "#86efac", "#22c55e", "#166534"]
 
 st.set_page_config(page_title="PRT Visualizer", page_icon="📈", layout="wide")
 init_db()
@@ -280,16 +280,16 @@ def stacked_bar_from_counts(
 
     y_label = "% of Ranking Keywords" if wins_focus else "% of Keywords"
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Top 3", x=months, y=pct["Top 3"].round(1),
-                         marker_color=GREEN,
-                         hovertemplate="Top 3: %{y:.1f}%<extra></extra>"))
-    fig.add_trace(go.Bar(name="Ranking (not top 3)", x=months, y=pct["Ranking"].round(1),
-                         marker_color=YELLOW,
-                         hovertemplate="Ranking (not top 3): %{y:.1f}%<extra></extra>"))
     if not wins_focus:
         fig.add_trace(go.Bar(name="Not Ranking", x=months, y=pct["Not Ranking"].round(1),
                              marker_color=RED,
                              hovertemplate="Not Ranking: %{y:.1f}%<extra></extra>"))
+    fig.add_trace(go.Bar(name="Ranking (not top 3)", x=months, y=pct["Ranking"].round(1),
+                         marker_color=YELLOW,
+                         hovertemplate="Ranking (not top 3): %{y:.1f}%<extra></extra>"))
+    fig.add_trace(go.Bar(name="Top 3", x=months, y=pct["Top 3"].round(1),
+                         marker_color=GREEN,
+                         hovertemplate="Top 3: %{y:.1f}%<extra></extra>"))
     fig.update_layout(
         barmode="stack", title=title, xaxis_title="Month",
         yaxis=dict(range=[0, 100], ticksuffix="%", title=y_label),
@@ -411,15 +411,15 @@ def stacked_bar_chart(df: pd.DataFrame, title: str) -> go.Figure:
     """Per-client stacked bar — used in drill-down and report views (small DataFrames)."""
     m = monthly_buckets(df)
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Top 3", x=m["month"], y=m["pct_top3"].round(1),
-                         marker_color=GREEN,
-                         hovertemplate="%{y:.1f}% in Top 3<extra></extra>"))
-    fig.add_trace(go.Bar(name="Ranking (not top 3)", x=m["month"], y=m["pct_ranking"].round(1),
-                         marker_color=YELLOW,
-                         hovertemplate="%{y:.1f}% ranking, not top 3<extra></extra>"))
     fig.add_trace(go.Bar(name="Not Ranking", x=m["month"], y=m["pct_not_ranking"].round(1),
                          marker_color=RED,
                          hovertemplate="%{y:.1f}% not ranking<extra></extra>"))
+    fig.add_trace(go.Bar(name="Ranking (not top 3)", x=m["month"], y=m["pct_ranking"].round(1),
+                         marker_color=YELLOW,
+                         hovertemplate="%{y:.1f}% ranking, not top 3<extra></extra>"))
+    fig.add_trace(go.Bar(name="Top 3", x=m["month"], y=m["pct_top3"].round(1),
+                         marker_color=GREEN,
+                         hovertemplate="%{y:.1f}% in Top 3<extra></extra>"))
     fig.update_layout(
         barmode="stack", title=title, xaxis_title="Month",
         yaxis=dict(range=[0, 100], ticksuffix="%", title="% of Keywords"),
@@ -706,10 +706,10 @@ _mod = monthly_org_dist[monthly_org_dist["bucket"] != "Not Ranking"] if _wins el
 _mld = monthly_loc_dist[monthly_loc_dist["bucket"] != "Not in Pack"] if _wins else monthly_loc_dist
 
 # Bucket lists for distribution charts — drop the "nothing" bucket in Wins Focus
-_org_buckets = ORG_BUCKETS[:-1] if _wins else ORG_BUCKETS   # drop "Not Ranking"
-_org_colors  = ORG_COLORS[:-1]  if _wins else ORG_COLORS
-_loc_buckets = LOC_BUCKETS[:-1] if _wins else LOC_BUCKETS   # drop "Not in Pack"
-_loc_colors  = LOC_COLORS[:-1]  if _wins else LOC_COLORS
+_org_buckets = ORG_BUCKETS[1:] if _wins else ORG_BUCKETS   # drop "Not Ranking"
+_org_colors  = ORG_COLORS[1:]  if _wins else ORG_COLORS
+_loc_buckets = LOC_BUCKETS[1:] if _wins else LOC_BUCKETS   # drop "Not in Pack"
+_loc_colors  = LOC_COLORS[1:]  if _wins else LOC_COLORS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
